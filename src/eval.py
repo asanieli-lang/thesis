@@ -60,6 +60,7 @@ def main():
     MODEL_PATH = "outputs/sleep_cnn_weights.pth"  # Cesta k naučenému modelu
     TEST_DATA_DIR = "/mnt/scratch/temporary/asanieli_data/processed_pt"  # Testovací data
     BATCH_SIZE = 512
+    TRAIN_RATIO = 0.8  # Stejný poměr jako při trénování!
 
     # Načtení modelu
     print(f"\nNačítám model z '{MODEL_PATH}'...")
@@ -67,9 +68,9 @@ def main():
     model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     print("Model úspěšně načten.")
 
-    # Načtení testovacích dat
+    # Načtení testovacích dat (POUZE test split!)
     print(f"\nNačítám testovací data z '{TEST_DATA_DIR}'...")
-    test_dataset = MyDataset(TEST_DATA_DIR)
+    test_dataset = MyDataset(TEST_DATA_DIR, split='test', split_ratio=TRAIN_RATIO)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
     print(f"Testovací data připravena. Počet vzorků: {len(test_dataset)}")
 
