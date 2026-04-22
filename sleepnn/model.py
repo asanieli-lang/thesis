@@ -2,7 +2,6 @@ import torch.nn as nn
 import torch
 
 class ResidualBlock2d(nn.Module):
-    """2D Residual block with skip connection."""
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, stride=1):
         super().__init__()
         padding = ((kernel_size[0] - 1) * dilation // 2, (kernel_size[1] - 1) * dilation // 2)
@@ -16,7 +15,6 @@ class ResidualBlock2d(nn.Module):
                                stride=1, padding=padding, dilation=dilation)
         self.bn2 = nn.BatchNorm2d(out_channels)
         
-        # Skip connection for channel/stride changes
         self.skip = nn.Identity()
         if in_channels != out_channels or stride != 1:
             self.skip = nn.Sequential(
@@ -36,12 +34,10 @@ class ResidualBlock2d(nn.Module):
         return out
 
 class SleepCNN(nn.Module):
-    def __init__(self, channels=4, num_classes=3):
+    def __init__(self, channels=4, num_classes=3, use_lstm=False):
         super().__init__()
+        self.use_lstm = use_lstm
         
-        # ========== MULTI-SCALE INPUT LAYER ==========
-        # Tři paralelní kernely různých velikostí pro zachycení různých frekvencí
-        # Kernely: (frekvence, čas) - menší v čase, větší v frekvencích
         self.multi_scale = nn.ModuleList([
             nn.Sequential(
                 nn.Conv2d(channels, 16, kernel_size=(7,3), stride=(2,1), padding=(3,1)),
@@ -68,11 +64,16 @@ class SleepCNN(nn.Module):
         self.res_block4 = ResidualBlock2d(128, 128, kernel_size=(3,3), dilation=1)
         self.res_block5 = ResidualBlock2d(128, 256, kernel_size=(3,3), dilation=1, stride=2)
         
-        # Classifier
+        if self.use_lstm:
+            self.lstm = nn.LSTM(input_size=256, hidden_size=128, num_layers=1, batch_first=True)
+            lstm_output_size = 128
+        else:
+            lstm_output_size = 256
+        
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.classifier = nn.Sequential(
             nn.Dropout(p=0.5),
-            nn.Linear(256, 128),
+            nn.Linear(lstm_output_size, 128),
             nn.ReLU(),
             nn.Dropout(p=0.3),
             nn.Linear(128, num_classes)
@@ -89,3 +90,13 @@ class SleepCNN(nn.Module):
         x = self.res_block4(x)
         x = self.res_block5(x)
         
+        x = self.global_avg_pool(x)
+        x = x.view(x.size(0), -1)
+        
+        if self.use_lstm and hasattr(self, 'lstm'):
+            x = x.unsqueeze(1)
+            x, _ = self.lstm(x)
+            x = x[:, -1, :]
+        
+        x = self.classifier(x)
+        return x
