@@ -100,3 +100,76 @@ class SleepCNN(nn.Module):
         
         x = self.classifier(x)
         return x
+
+
+class SequenceCNN(nn.Module):    
+    def __init__(self, channels=4, num_classes=3, lstm_hidden=128, sequence_length=15):
+        super().__init__()
+        self.multi_scale = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(channels, 16, kernel_size=(7,3), stride=(2,1), padding=(3,1)),
+                nn.BatchNorm2d(16),
+                nn.ReLU(),
+            ), 
+            nn.Sequential(
+                nn.Conv2d(channels, 16, kernel_size=(3,7), stride=(2,1), padding=(1,3)),
+                nn.BatchNorm2d(16),
+                nn.ReLU(),
+            ),
+            nn.Sequential(
+                nn.Conv2d(channels, 16, kernel_size=(5,5), stride=(2,1), padding=(2,2)),
+                nn.BatchNorm2d(16),
+                nn.ReLU(),
+            )
+        ])
+        
+        self.maxpool = nn.MaxPool2d(kernel_size=4, stride=4)
+
+        self.res_block1 = ResidualBlock2d(48, 64, kernel_size=(5,3), dilation=1)
+        self.res_block2 = ResidualBlock2d(64, 64, kernel_size=(5,3), dilation=1)
+        self.res_block3 = ResidualBlock2d(64, 128, kernel_size=(5,3), dilation=1, stride=2)
+        self.res_block4 = ResidualBlock2d(128, 128, kernel_size=(3,3), dilation=1)
+        self.res_block5 = ResidualBlock2d(128, 256, kernel_size=(3,3), dilation=1, stride=2)
+        
+        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.lstm = nn.LSTM(
+            input_size=256,
+            hidden_size=lstm_hidden,
+            num_layers=2,
+            batch_first=True,
+            dropout=0.3
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(p=0.5),
+            nn.Linear(lstm_hidden, 128), 
+            nn.ReLU(),  
+            nn.Dropout(p=0.3), 
+            nn.Linear(128, num_classes) 
+        )
+    
+    def forward(self, x):
+        batch_size, seq_len, channels, height, width = x.shape
+        x = x.reshape(batch_size * seq_len, channels, height, width)
+        x_scales = [layer(x) for layer in self.multi_scale]
+        x = torch.cat(x_scales, dim=1)  
+        
+        x = self.maxpool(x)
+        
+
+        x = self.res_block1(x)
+        x = self.res_block2(x)
+        x = self.res_block3(x)
+        x = self.res_block4(x)
+        x = self.res_block5(x)
+        
+        x = self.global_avg_pool(x)
+        x = x.view(batch_size * seq_len, -1) 
+
+        x = x.reshape(batch_size, seq_len, 256)
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        x = lstm_out[:, -1, :]
+
+        x = self.classifier(x)
+        
+        return x
