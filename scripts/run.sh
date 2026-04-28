@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=sleep_train_single
 #SBATCH --partition=long
-#SBATCH --gres=gpu:2        
-#SBATCH --cpus-per-task=16    # 8 jader bohatě stačí pro 1 GPU
-#SBATCH --mem=64G             # 64GB RAM je jistota
+#SBATCH --gres=gpu:4        
+#SBATCH --cpus-per-task=24   
+#SBATCH --mem=128G
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
@@ -20,8 +20,8 @@ export TORCH_NCCL_BLOCKING_WAIT=1
 export NCCL_DEBUG=INFO
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-# Spustit trénink na 2 GPU
-torchrun --nproc_per_node=2 sleepnn/train.py
+
+torchrun --nproc_per_node=4 sleepnn/train.py
 
 if [ $? -eq 0 ]; then
     echo ""
