@@ -8,7 +8,7 @@ from torch.utils.data import Dataset
 from typing import Dict, List, Tuple
 
 class MyDataset(Dataset):
-    def __init__(self, data_dir: str, split: str = 'train', split_ratio: float = 0.8): #80 trenink
+    def __init__(self, data_dir: str, split: str = 'train', split_ratio: float = 0.8):
         self.data_dir = data_dir
         self.split = split
         self.split_ratio = split_ratio
@@ -216,7 +216,7 @@ class SequenceDataset(Dataset):
         data_dir: str,
         split: str = 'train',
         split_ratio: float = 0.8,
-        sequence_length: int = 30,
+        sequence_length: int = 20,
         stride: int = 1
     ):
         self.sequence_length = sequence_length

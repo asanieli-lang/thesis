@@ -12,11 +12,11 @@ import numpy as np
 from dataset import SequenceDataset
 from model import SequenceCNN
 
-RUN_ID = 3
+RUN_ID = 7
 
 os.makedirs("outputs", exist_ok=True)
 
-def plot_hypnogram(all_labels, all_preds, run_id, num_samples=500):
+def plot_hypnogram(all_labels, all_preds, run_id, num_samples=1000):
     plt.figure(figsize=(15, 5))
     plt.plot(all_labels[:num_samples], label='Ground Truth', alpha=0.7, color='black', linewidth=2)
     plt.plot(all_preds[:num_samples], label='Predicted', alpha=0.5, color='red', linestyle='--', linewidth=1.5)

@@ -1,6 +1,17 @@
 import torch.nn as nn
 import torch
 
+# class Attention(nn.Module):
+#     def __init__(self, hidden_dim):
+#         super(Attention, self).__init__()
+#         self.attention = nn.Linear(hidden_dim, 1)
+
+#     def forward(self, lstm_output):
+#         weights = self.attention(lstm_output) # [batch, seq_len, 1]
+#         weights = torch.softmax(weights, dim=1)
+#         context = torch.sum(weights * lstm_output, dim=1) 
+#         return context, weights
+
 class ResidualBlock2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, stride=1):
         super().__init__()
@@ -69,16 +80,17 @@ class SequenceCNN(nn.Module):
             hidden_size=lstm_hidden,
             num_layers=2,
             batch_first=True,
-            dropout=0.5
+            dropout=0.7
         )
 
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=0.7),
             nn.Linear(lstm_hidden, 64), 
             nn.ReLU(),  
-            nn.Dropout(p=0.5), 
+            nn.Dropout(p=0.7), 
             nn.Linear(64, num_classes) 
         )
+        # self.attention = Attention(lstm_hidden)
     
     def forward(self, x):
         batch_size, seq_len, channels, height, width = x.shape
@@ -100,8 +112,10 @@ class SequenceCNN(nn.Module):
 
         x = x.reshape(batch_size, seq_len, 256)
         lstm_out, _ = self.lstm(x)
-        x = lstm_out[:, -1, :]
-
-        x = self.classifier(x)
         
+        # context, attn_weights = self.attention(lstm_out)
+        x = lstm_out[:, -1, :]
+        # x = self.classifier(context)
+        x = self.classifier(x)
         return x
+ 

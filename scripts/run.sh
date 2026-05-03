@@ -2,8 +2,8 @@
 #SBATCH --job-name=sleep_train_single
 #SBATCH --partition=long
 #SBATCH --gres=gpu:4        
-#SBATCH --cpus-per-task=24   
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=32   # AMD EPYC: 48 cores, leave some for system
+#SBATCH --mem=256G           # Use more available memory (512GB total)
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err

@@ -16,7 +16,7 @@ from sklearn.metrics import f1_score
 from dataset import SequenceDataset
 from model import  SequenceCNN
 
-RUN_ID = 3
+RUN_ID = 7
 
 os.makedirs("outputs", exist_ok=True)
 
@@ -181,8 +181,8 @@ def main():
     output_plot = f"outputs/training_metrics_lstm_{RUN_ID}.png"
 
     
-    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-2) 
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.02)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=3e-3) 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5)
     
     if log_on_rank_0:
@@ -191,15 +191,20 @@ def main():
         print("Starting training...")
         print(f"{'='*60}\n")
     
-    epoch_losses = []
+    
+    train_losses = []
+    val_losses = []
     test_accuracies = []
     epoch_f1_scores = []
-    early_stopping = EarlyStopping(patience=7)
+    early_stopping = EarlyStopping(patience=10)
     for epoch in range(NUM_EPOCHS):
         train_sampler.set_epoch(epoch)
         
         model.train()
-        running_loss = 0.0 
+        epoch_running_loss = 0.0
+        epoch_train_total = 0.0
+        running_loss = 0.0
+        train_total = 0.0
         
         for batch_idx, (signals, labels) in enumerate(train_loader):
             signals = signals.to(device)
@@ -212,14 +217,19 @@ def main():
             optimizer.step()
             
             loss_val = loss.item()
-            running_loss += loss_val  
+            running_loss += loss_val * labels.size(0)
+            train_total += labels.size(0)
+            epoch_running_loss += loss_val * labels.size(0)
+            epoch_train_total += labels.size(0)
             
             if log_on_rank_0 and (batch_idx + 1) % 500 == 0:
-                avg_loss = running_loss / 500
+                avg_loss = running_loss / train_total
                 print(f"Epoch {epoch+1}/{NUM_EPOCHS} - Batch {batch_idx+1}/{len(train_loader)}: {avg_loss:.4f}")
                 running_loss = 0.0
+                train_total = 0.0
         
-        epoch_losses.append(avg_val_loss)
+        avg_train_loss = epoch_running_loss / epoch_train_total if epoch_train_total > 0 else 0.0
+        train_losses.append(avg_train_loss)
         
         model.eval()
         test_loss = 0.0
@@ -246,6 +256,8 @@ def main():
         avg_val_loss = test_loss / test_total if test_total > 0 else 0.0
         test_accuracy = 100 * test_correct / test_total if test_total > 0 else 0.0
         
+        val_losses.append(avg_val_loss)
+        
         f1_macro = 0.0
         if log_on_rank_0:
             final_preds = torch.cat(all_preds).numpy()
@@ -256,7 +268,7 @@ def main():
         epoch_f1_scores.append(f1_macro)
         
         if log_on_rank_0:
-            print(f"Epoch {epoch+1}: Val Loss={avg_val_loss:.4f} | Acc={test_accuracy:.2f}% | F1: {f1_macro:.4f}")
+            print(f"Epoch {epoch+1}: Train Loss={avg_train_loss:.4f} | Val Loss={avg_val_loss:.4f} | Acc={test_accuracy:.2f}% | F1: {f1_macro:.4f}")
         
         if rank == 0:
             should_stop = early_stopping(f1_macro, model.module)
@@ -289,16 +301,17 @@ def main():
         
         with open(output_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "train_loss", "test_accuracy", "f1_macro"])  
-            for i, loss_val in enumerate(epoch_losses):
-                writer.writerow([i + 1, loss_val, test_accuracies[i], epoch_f1_scores[i]])
+            writer.writerow(["epoch", "train_loss", "val_loss", "test_accuracy", "f1_macro"])  
+            for i, train_loss_val in enumerate(train_losses):
+                writer.writerow([i + 1, train_loss_val, val_losses[i], test_accuracies[i], epoch_f1_scores[i]])
         print(f"Results saved to {output_csv}")
         
         df = pd.read_csv(output_csv)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         
-        ax1.plot(df['epoch'], df['train_loss'], marker='o', color='#1f77b4', linewidth=2, label='Loss')
-        ax1.set_title(f'Training Loss ({model_name})', fontsize=12)
+        ax1.plot(df['epoch'], df['train_loss'], marker='o', color='#1f77b4', linewidth=2, label='Train Loss')
+        ax1.plot(df['epoch'], df['val_loss'], marker='s', color='#ff7f0e', linewidth=2, label='Val Loss')
+        ax1.set_title(f'Training & Validation Loss ({model_name})', fontsize=12)
         ax1.set_xlabel('Epoch', fontsize=10)
         ax1.set_ylabel('Loss', fontsize=10)
         ax1.grid(True, alpha=0.3)

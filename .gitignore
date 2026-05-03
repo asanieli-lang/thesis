@@ -10,10 +10,8 @@ venv/
 
 # Výstupy a logy - lokální (necommituj)
 logs/
-outputs/
 *.out
 *.err
-*.pth
 *.png
 *.csv
 loss_history.csv
