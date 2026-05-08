@@ -16,6 +16,7 @@ logs/
 *.csv
 loss_history.csv
 
+.vscode
 
 # Distribution / packaging
 .Python

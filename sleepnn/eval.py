@@ -12,7 +12,16 @@ import numpy as np
 from dataset import SequenceDataset
 from model import SequenceCNN
 
-RUN_ID = 7
+RUN_ID = os.environ.get("SLEEPNN_RUN_ID")
+SEQ_LEN = 20
+STRIDE = 5
+LSTM_HIDDEN = 64
+NUM_HEADS = 4
+ATTN_DROPOUT = 0.1
+LSTM_LAYERS = 1
+LSTM_DROPOUT = 0.3
+CLASSIFIER_DROPOUT1 = 0.5
+CLASSIFIER_DROPOUT2 = 0.3
 
 os.makedirs("outputs", exist_ok=True)
 
@@ -49,8 +58,8 @@ def plot_f1_per_class(all_labels, all_preds, run_id):
     plt.savefig(f"outputs/f1_per_class_{run_id}.png", dpi=300)
     print(f"F1 per-class chart saved to outputs/f1_per_class_{run_id}.png")
 
-def plot_validation_metrics(all_labels, all_preds, all_probs, run_id):
-    """Plot all validation metrics (Precision, Recall, F1, Accuracy, Cohen Kappa, Log Loss, Explained Variance)"""
+def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
+    """Plot evaluation metrics (Precision, Recall, F1, Accuracy, Cohen Kappa, Log Loss, Explained Variance)."""
     precision_macro = precision_score(all_labels, all_preds, average='macro')
     recall_macro = recall_score(all_labels, all_preds, average='macro')
     f1_macro = f1_score(all_labels, all_preds, average='macro')
@@ -75,13 +84,18 @@ def plot_validation_metrics(all_labels, all_preds, all_probs, run_id):
     fig, ax = plt.subplots(figsize=(10, 6))
     metric_names = list(metrics.keys())
     metric_values = list(metrics.values())
+    x = np.arange(len(metric_names))
     
-    bars = ax.bar(metric_names, metric_values, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'], alpha=0.7)
+    bars = ax.bar(x, metric_values, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'], alpha=0.7)
     
     ax.set_ylabel('Value', fontsize=12)
-    ax.set_title('Validation Metrics', fontsize=14, fontweight='bold')
-    ax.set_ylim(0, 1.1)
+    ax.set_title('Evaluation Metrics', fontsize=14, fontweight='bold')
+    min_val = min(metric_values)
+    max_val = max(metric_values)
+    pad = (max_val - min_val) * 0.1 if max_val != min_val else 0.1
+    ax.set_ylim(min_val - pad, max_val + pad)
     ax.grid(True, alpha=0.3, axis='y')
+    ax.set_xticks(x)
     ax.set_xticklabels(metric_names, rotation=45, ha='right')
     
     for i, (bar, name) in enumerate(zip(bars, metric_names)):
@@ -94,8 +108,8 @@ def plot_validation_metrics(all_labels, all_preds, all_probs, run_id):
                 f'{display_value:.3f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
     
     plt.tight_layout()
-    plt.savefig(f"outputs/validation_metrics_{run_id}.png", dpi=300)
-    print(f"Validation metrics chart saved to outputs/validation_metrics_{run_id}.png")
+    plt.savefig(f"outputs/eval_metrics_{run_id}.png", dpi=300)
+    print(f"Evaluation metrics chart saved to outputs/eval_metrics_{run_id}.png")
     
     print(f"\nDetailed Metrics:")
     print(f"  Precision (macro):      {precision_macro:.4f}")
@@ -152,7 +166,7 @@ def evaluate_model(model, test_loader, device):
     
     plot_hypnogram(all_labels, all_preds, RUN_ID)
     plot_f1_per_class(all_labels, all_preds, RUN_ID)
-    plot_validation_metrics(all_labels, all_preds, all_probs, RUN_ID)
+    plot_eval_metrics(all_labels, all_preds, all_probs, RUN_ID)
     
     return accuracy_score(all_labels, all_preds), cm
 
@@ -165,19 +179,35 @@ def main():
     print(f"Device: {device}\n")
 
     MODEL_PATH = f"outputs/sleep_lstm_weights_{RUN_ID}.pth"
-    TEST_DATA_DIR = "/mnt/scratch/temporary/asanieli_data/processed_pt"
-    BATCH_SIZE = 64
+    TEST_DATA_DIR = os.environ.get("SLEEPNN_DATA_DIR", "/mnt/scratch/temporary/asanieli_data/processed_pt")
+    BATCH_SIZE = 16
     NUM_WORKERS = 4
 
     print(f"Loading model from {MODEL_PATH}...")
-    model = SequenceCNN(channels=4, num_classes=3, lstm_hidden=64).to(device)
+    model = SequenceCNN(
+        channels=4,
+        num_classes=3,
+        lstm_hidden=LSTM_HIDDEN,
+        attn_dropout=ATTN_DROPOUT,
+        num_heads=NUM_HEADS,
+        lstm_layers=LSTM_LAYERS,
+        lstm_dropout=LSTM_DROPOUT,
+        classifier_dropout1=CLASSIFIER_DROPOUT1,
+        classifier_dropout2=CLASSIFIER_DROPOUT2
+    ).to(device)
     checkpoint = torch.load(MODEL_PATH, map_location=device)
     model.load_state_dict(checkpoint)
     model.eval()
     print("Model loaded.\n")
 
     print("Loading test data...")
-    test_dataset = SequenceDataset(TEST_DATA_DIR, split='test', split_ratio=0.8)
+    test_dataset = SequenceDataset(
+        TEST_DATA_DIR,
+        split='test',
+        split_ratio=0.8,
+        sequence_length=SEQ_LEN,
+        stride=STRIDE
+    )
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
     print(f"Test sequences: {len(test_dataset)}\n")
 

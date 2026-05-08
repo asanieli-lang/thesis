@@ -1,16 +1,39 @@
 import torch.nn as nn
 import torch
 
-# class Attention(nn.Module):
-#     def __init__(self, hidden_dim):
-#         super(Attention, self).__init__()
-#         self.attention = nn.Linear(hidden_dim, 1)
+class MultiHeadAttention(nn.Module):
+    def __init__(self, hidden_dim, num_heads=4, dropout=0.1):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = hidden_dim // num_heads
+        
+        assert hidden_dim % num_heads == 0
+        
+        self.query = nn.Linear(hidden_dim, hidden_dim)
+        self.key = nn.Linear(hidden_dim, hidden_dim)
+        self.value = nn.Linear(hidden_dim, hidden_dim)
+        self.out = nn.Linear(hidden_dim, hidden_dim)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x):
+        batch_size, seq_len, hidden_dim = x.shape
+        Q = self.query(x).view(batch_size, seq_len, 
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        K = self.key(x).view(batch_size, seq_len, 
+                              self.num_heads, self.head_dim).transpose(1, 2)
+        V = self.value(x).view(batch_size, seq_len, 
+                                self.num_heads, self.head_dim).transpose(1, 2)
+        
+        scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
+        attn_weights = torch.softmax(scores, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        
+        context = torch.matmul(attn_weights, V)
+        context = context.transpose(1, 2).contiguous().view(
+                                batch_size, seq_len, hidden_dim)
+        context = self.out(context)
 
-#     def forward(self, lstm_output):
-#         weights = self.attention(lstm_output) # [batch, seq_len, 1]
-#         weights = torch.softmax(weights, dim=1)
-#         context = torch.sum(weights * lstm_output, dim=1) 
-#         return context, weights
+        return context.mean(dim=1), attn_weights
 
 class ResidualBlock2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, stride=1):
@@ -46,7 +69,18 @@ class ResidualBlock2d(nn.Module):
 
 
 class SequenceCNN(nn.Module):    
-    def __init__(self, channels=4, num_classes=3, lstm_hidden=64):
+    def __init__(
+        self,
+        channels=4,
+        num_classes=3,
+        lstm_hidden=64,
+        attn_dropout=0.1,
+        num_heads=2,
+        lstm_layers=2,
+        lstm_dropout=0.5,
+        classifier_dropout1=0.5,
+        classifier_dropout2=0.3
+    ):
         super().__init__()
         self.multi_scale = nn.ModuleList([
             nn.Sequential(
@@ -75,22 +109,27 @@ class SequenceCNN(nn.Module):
         self.res_block5 = ResidualBlock2d(128, 256, kernel_size=(3,3), stride=2)
         
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+        lstm_internal_dropout = lstm_dropout if lstm_layers > 1 else 0.0
         self.lstm = nn.LSTM(
             input_size=256,
             hidden_size=lstm_hidden,
-            num_layers=2,
+            num_layers=lstm_layers,
             batch_first=True,
-            dropout=0.7
+            dropout=lstm_internal_dropout
         )
 
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.7),
-            nn.Linear(lstm_hidden, 64), 
+            nn.Dropout(p=classifier_dropout1),
+            nn.Linear(lstm_hidden, 32), 
             nn.ReLU(),  
-            nn.Dropout(p=0.7), 
-            nn.Linear(64, num_classes) 
+            nn.Dropout(p=classifier_dropout2), 
+            nn.Linear(32, num_classes) 
         )
-        # self.attention = Attention(lstm_hidden)
+        self.attention = MultiHeadAttention(
+            hidden_dim=lstm_hidden,
+            num_heads=num_heads,
+            dropout=attn_dropout
+        )
     
     def forward(self, x):
         batch_size, seq_len, channels, height, width = x.shape
@@ -109,13 +148,11 @@ class SequenceCNN(nn.Module):
         
         x = self.global_avg_pool(x)
         x = x.view(batch_size * seq_len, -1) 
-
-        x = x.reshape(batch_size, seq_len, 256)
-        lstm_out, _ = self.lstm(x)
         
-        # context, attn_weights = self.attention(lstm_out)
-        x = lstm_out[:, -1, :]
-        # x = self.classifier(context)
-        x = self.classifier(x)
+        x = x.reshape(batch_size, seq_len, 256)
+        lstm_out, _ = self.lstm(x)                  
+        context, attn_weights = self.attention(lstm_out) 
+        
+        x = self.classifier(context)
         return x
  

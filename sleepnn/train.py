@@ -16,21 +16,37 @@ from sklearn.metrics import f1_score
 from dataset import SequenceDataset
 from model import  SequenceCNN
 
-RUN_ID = 7
+RUN_ID = os.environ.get("SLEEPNN_RUN_ID")
+SEQ_LEN = 20
+STRIDE = 5
+LSTM_HIDDEN = 64
+NUM_HEADS = 4
+ATTN_DROPOUT = 0.1 
+LSTM_LAYERS = 1
+LSTM_DROPOUT = 0.3   
+CLASSIFIER_DROPOUT1 = 0.5
+CLASSIFIER_DROPOUT2 = 0.3
+LABEL_SMOOTH = 0.02
+WEIGHT_DECAY = 3e-3
+LEARNING_RATE = 1e-4
+WARMUP_EPOCHS = 3
+PATIENCE = 15
 
+USE_CLASS_WEIGHTS = True
 os.makedirs("outputs", exist_ok=True)
 
 def compute_class_weights(train_labels, num_classes=3):
-    unique, counts = np.unique(train_labels, return_counts=True)
-    total = len(train_labels)
-    weights = torch.zeros(num_classes)
-    for i, count in enumerate(counts):
-        weights[i] = total / (num_classes * count)
+    counts = np.bincount(train_labels.astype(int), minlength=num_classes).astype(np.float32)
+    counts = np.clip(counts, 1.0, None)  # ochrana proti dělení nulou
+    counts_t = torch.tensor(counts, dtype=torch.float32)
+    total = counts_t.sum()
+    weights = torch.sqrt(total / (num_classes * counts_t))
     weights = weights / weights.sum() * num_classes
     return weights
 
 def get_or_compute_class_weights(data_dir: str, split_ratio: float = 0.8, num_classes: int = 3):
-    cache_file = f"outputs/class_weights_cache_{RUN_ID}.json"
+    # nový cache název, aby se nenačetly staré (bez sqrt) váhy
+    cache_file = f"outputs/class_weights_cache_{RUN_ID}_sqrt.json"
     
     if os.path.exists(cache_file):
         with open(cache_file, 'r') as f:
@@ -95,11 +111,10 @@ def main():
         print(f"Distributed Training: {world_size} GPUs")
         print(f"{'='*60}\n")
     
-    BATCH_SIZE = 64
+    BATCH_SIZE = 16
     
-    LEARNING_RATE = 1e-4
-    NUM_EPOCHS = 30
-    DATA_DIR = "/mnt/scratch/temporary/asanieli_data/processed_pt"
+    NUM_EPOCHS = 100
+    DATA_DIR = os.environ.get("SLEEPNN_DATA_DIR", "/mnt/scratch/temporary/asanieli_data/processed_pt")
     TRAIN_RATIO = 0.8
     NUM_WORKERS = 4
     
@@ -107,7 +122,8 @@ def main():
             DATA_DIR,
             split='train',
             split_ratio=TRAIN_RATIO,
-            stride=1
+            sequence_length=SEQ_LEN,
+            stride=STRIDE
         )
 
     train_sampler = DistributedSampler(
@@ -134,7 +150,8 @@ def main():
             DATA_DIR,
             split='test',
             split_ratio=TRAIN_RATIO,
-            stride=1
+            sequence_length=SEQ_LEN,
+            stride=STRIDE
         )
 
     test_sampler = DistributedSampler(
@@ -170,7 +187,13 @@ def main():
     model = SequenceCNN(
             channels=4,
             num_classes=3,
-            lstm_hidden=64
+            lstm_hidden=LSTM_HIDDEN,
+            attn_dropout=ATTN_DROPOUT,
+            num_heads=NUM_HEADS,
+            lstm_layers=LSTM_LAYERS,
+            lstm_dropout=LSTM_DROPOUT,
+            classifier_dropout1=CLASSIFIER_DROPOUT1,
+            classifier_dropout2=CLASSIFIER_DROPOUT2
         ).to(device)
     
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
@@ -181,9 +204,12 @@ def main():
     output_plot = f"outputs/training_metrics_lstm_{RUN_ID}.png"
 
     
-    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.02)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=3e-3) 
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=2, factor=0.5)
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+        label_smoothing=LABEL_SMOOTH
+    )
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY) 
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=PATIENCE//2, factor=0.5)
     
     if log_on_rank_0:
         print(f"Model initialized: {model_name}\n")
@@ -193,11 +219,19 @@ def main():
     
     
     train_losses = []
-    val_losses = []
+    test_losses = []
     test_accuracies = []
     epoch_f1_scores = []
-    early_stopping = EarlyStopping(patience=10)
+    early_stopping = EarlyStopping(patience=PATIENCE)
+    
+    def set_optimizer_lr(opt, lr):
+        for param_group in opt.param_groups:
+            param_group["lr"] = lr
     for epoch in range(NUM_EPOCHS):
+        if epoch < WARMUP_EPOCHS:
+            warmup_lr = LEARNING_RATE * (epoch + 1) / WARMUP_EPOCHS
+            set_optimizer_lr(optimizer, warmup_lr)
+
         train_sampler.set_epoch(epoch)
         
         model.train()
@@ -253,10 +287,10 @@ def main():
                 all_preds.append(predicted.cpu())
                 all_labels.append(labels.cpu())
         
-        avg_val_loss = test_loss / test_total if test_total > 0 else 0.0
+        avg_test_loss = test_loss / test_total if test_total > 0 else 0.0
         test_accuracy = 100 * test_correct / test_total if test_total > 0 else 0.0
         
-        val_losses.append(avg_val_loss)
+        test_losses.append(avg_test_loss)
         
         f1_macro = 0.0
         if log_on_rank_0:
@@ -268,7 +302,7 @@ def main():
         epoch_f1_scores.append(f1_macro)
         
         if log_on_rank_0:
-            print(f"Epoch {epoch+1}: Train Loss={avg_train_loss:.4f} | Val Loss={avg_val_loss:.4f} | Acc={test_accuracy:.2f}% | F1: {f1_macro:.4f}")
+            print(f"Epoch {epoch+1}: Train Loss={avg_train_loss:.4f} | Test Loss={avg_test_loss:.4f} | Acc={test_accuracy:.2f}% | F1: {f1_macro:.4f}")
         
         if rank == 0:
             should_stop = early_stopping(f1_macro, model.module)
@@ -283,8 +317,8 @@ def main():
                 print(f"\nEarly stopping at epoch {epoch+1}")
             break
         
-        if rank == 0:
-            scheduler.step(avg_val_loss)
+        if rank == 0 and (epoch + 1) > WARMUP_EPOCHS:
+            scheduler.step(avg_test_loss)
 
     if log_on_rank_0:
         print(f"\n{'='*60}")
@@ -301,17 +335,17 @@ def main():
         
         with open(output_csv, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["epoch", "train_loss", "val_loss", "test_accuracy", "f1_macro"])  
+            writer.writerow(["epoch", "train_loss", "test_loss", "test_accuracy", "f1_macro"])  
             for i, train_loss_val in enumerate(train_losses):
-                writer.writerow([i + 1, train_loss_val, val_losses[i], test_accuracies[i], epoch_f1_scores[i]])
+                writer.writerow([i + 1, train_loss_val, test_losses[i], test_accuracies[i], epoch_f1_scores[i]])
         print(f"Results saved to {output_csv}")
         
         df = pd.read_csv(output_csv)
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         
         ax1.plot(df['epoch'], df['train_loss'], marker='o', color='#1f77b4', linewidth=2, label='Train Loss')
-        ax1.plot(df['epoch'], df['val_loss'], marker='s', color='#ff7f0e', linewidth=2, label='Val Loss')
-        ax1.set_title(f'Training & Validation Loss ({model_name})', fontsize=12)
+        ax1.plot(df['epoch'], df['test_loss'], marker='s', color='#ff7f0e', linewidth=2, label='Test Loss')
+        ax1.set_title(f'Training & Test Loss ({model_name})', fontsize=12)
         ax1.set_xlabel('Epoch', fontsize=10)
         ax1.set_ylabel('Loss', fontsize=10)
         ax1.grid(True, alpha=0.3)

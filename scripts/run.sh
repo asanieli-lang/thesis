@@ -13,6 +13,10 @@ source venv/bin/activate
 
 echo "Sleep Stage Classification"
 
+RUN_ID="${SLEEPNN_RUN_ID:-${SLURM_JOB_ID:-200}}"
+export SLEEPNN_RUN_ID="$RUN_ID"
+echo "RUN_ID=${RUN_ID}"
+
 
 # NCCL settings
 export NCCL_TIMEOUT_MIN=30
