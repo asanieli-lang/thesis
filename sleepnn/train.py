@@ -151,7 +151,7 @@ def main():
             split='test',
             split_ratio=TRAIN_RATIO,
             sequence_length=SEQ_LEN,
-            stride=STRIDE
+            stride=SEQ_LEN
         )
 
     test_sampler = DistributedSampler(
@@ -223,6 +223,7 @@ def main():
     test_accuracies = []
     epoch_f1_scores = []
     early_stopping = EarlyStopping(patience=PATIENCE)
+    first_epoch_losses = []
     
     def set_optimizer_lr(opt, lr):
         for param_group in opt.param_groups:
@@ -255,6 +256,9 @@ def main():
             train_total += labels.size(0)
             epoch_running_loss += loss_val * labels.size(0)
             epoch_train_total += labels.size(0)
+            
+            if epoch == 0 and log_on_rank_0:
+                first_epoch_losses.append(loss_val)
             
             if log_on_rank_0 and (batch_idx + 1) % 500 == 0:
                 avg_loss = running_loss / train_total
@@ -319,6 +323,17 @@ def main():
         
         if rank == 0 and (epoch + 1) > WARMUP_EPOCHS:
             scheduler.step(avg_test_loss)
+        
+        if epoch == 0 and log_on_rank_0:
+            plt.figure(figsize=(10, 4))
+            plt.plot(first_epoch_losses, linewidth=1.5, color='#1f77b4')
+            plt.xlabel('Batch Index')
+            plt.ylabel('Loss')
+            plt.title('Training Loss During First Epoch (Batch-level)')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(f"outputs/first_epoch_loss_{RUN_ID}.png", dpi=300)
+            plt.close()
 
     if log_on_rank_0:
         print(f"\n{'='*60}")

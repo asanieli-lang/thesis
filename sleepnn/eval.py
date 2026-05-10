@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import (
     confusion_matrix, classification_report, accuracy_score, f1_score,
-    precision_score, recall_score, cohen_kappa_score, log_loss, explained_variance_score
+    precision_score, recall_score, cohen_kappa_score, log_loss
 )
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -58,6 +58,47 @@ def plot_f1_per_class(all_labels, all_preds, run_id):
     plt.savefig(f"outputs/f1_per_class_{run_id}.png", dpi=300)
     print(f"F1 per-class chart saved to outputs/f1_per_class_{run_id}.png")
 
+def plot_scatter_confidence(all_labels, all_probs, run_id):
+    """Scatter: confidence modelu pro správné vs. špatné predikce."""
+    all_labels = np.array(all_labels)
+    all_probs = np.array(all_probs)
+    
+    max_probs = all_probs.max(axis=1)
+    all_preds = all_probs.argmax(axis=1)
+    correct = (all_preds == all_labels)
+    
+    class_names = ['Wake', 'NREM', 'REM']
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    for cls_idx, (ax, name) in enumerate(zip(axes, class_names)):
+        mask = all_labels == cls_idx
+        if mask.sum() == 0:
+            continue
+        
+        correct_conf = max_probs[mask & correct]
+        wrong_conf = max_probs[mask & ~correct]
+        
+        ax.scatter(range(len(correct_conf)), 
+                   np.sort(correct_conf)[::-1],
+                   alpha=0.3, s=5, color='green', label='Correct')
+        ax.scatter(range(len(wrong_conf)),
+                   np.sort(wrong_conf)[::-1],
+                   alpha=0.3, s=5, color='red', label='Incorrect')
+        ax.set_title(f'{name}\n'
+                     f'Correct: {len(correct_conf)} '
+                     f'| Wrong: {len(wrong_conf)}')
+        ax.set_xlabel('Sample rank')
+        ax.set_ylabel('Max predicted probability')
+        ax.set_ylim(0, 1)
+        ax.legend(markerscale=3)
+        ax.grid(True, alpha=0.3)
+    
+    plt.suptitle('Model Confidence: Correct vs. Incorrect Predictions',
+                 fontsize=13, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig(f"outputs/scatter_confidence_{run_id}.png", dpi=300)
+    print(f"Scatter plot saved to outputs/scatter_confidence_{run_id}.png")
+
 def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
     """Plot evaluation metrics (Precision, Recall, F1, Accuracy, Cohen Kappa, Log Loss, Explained Variance)."""
     precision_macro = precision_score(all_labels, all_preds, average='macro')
@@ -68,17 +109,13 @@ def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
     
     logloss = log_loss(all_labels, all_probs)
     
-    explained_var = explained_variance_score(all_labels, all_preds, multioutput='raw_values')
-    explained_var_mean = np.mean(explained_var)
-    
     metrics = {
         'Precision': precision_macro,
         'Recall': recall_macro,
         'F1-Score': f1_macro,
         'Accuracy': accuracy,
         'Cohen Kappa': kappa,
-        'Log Loss': logloss,
-        'Explained Variance': explained_var_mean
+        'Log Loss': logloss
     }
     
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -86,7 +123,7 @@ def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
     metric_values = list(metrics.values())
     x = np.arange(len(metric_names))
     
-    bars = ax.bar(x, metric_values, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2'], alpha=0.7)
+    bars = ax.bar(x, metric_values, color=['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'], alpha=0.7)
     
     ax.set_ylabel('Value', fontsize=12)
     ax.set_title('Evaluation Metrics', fontsize=14, fontweight='bold')
@@ -118,7 +155,6 @@ def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
     print(f"  Accuracy:               {accuracy:.4f}")
     print(f"  Cohen Kappa:            {kappa:.4f}")
     print(f"  Log Loss:               {logloss:.4f}")
-    print(f"  Explained Variance:     {explained_var_mean:.4f}")
 
 def evaluate_model(model, test_loader, device):
     model.eval() 
@@ -166,6 +202,7 @@ def evaluate_model(model, test_loader, device):
     
     plot_hypnogram(all_labels, all_preds, RUN_ID)
     plot_f1_per_class(all_labels, all_preds, RUN_ID)
+    plot_scatter_confidence(all_labels, all_probs, RUN_ID)
     plot_eval_metrics(all_labels, all_preds, all_probs, RUN_ID)
     
     return accuracy_score(all_labels, all_preds), cm
@@ -206,7 +243,7 @@ def main():
         split='test',
         split_ratio=0.8,
         sequence_length=SEQ_LEN,
-        stride=STRIDE
+        stride=SEQ_LEN
     )
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
     print(f"Test sequences: {len(test_dataset)}\n")
