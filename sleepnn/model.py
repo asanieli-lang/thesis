@@ -33,7 +33,7 @@ class MultiHeadAttention(nn.Module):
                                 batch_size, seq_len, hidden_dim)
         context = self.out(context)
 
-        return context.mean(dim=1), attn_weights
+        return context[:, -1, :], attn_weights
 
 class ResidualBlock2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, stride=1):
@@ -73,7 +73,7 @@ class SequenceCNN(nn.Module):
         self,
         channels=4,
         num_classes=3,
-        lstm_hidden=64,
+        lstm_hidden=128,
         attn_dropout=0.1,
         num_heads=2,
         lstm_layers=2,

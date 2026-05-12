@@ -283,6 +283,7 @@ class SequenceDataset(Dataset):
         
         file_path = self.base_dataset.files[file_idx]
         spec_path = str(file_path).replace('_processed.pt', '_spec.pt')
+        subject_id = self.base_dataset.file_to_subject[file_path]
         
         data = self._load_data_file(spec_path)
         
@@ -292,10 +293,18 @@ class SequenceDataset(Dataset):
         target_label = int(labels[-1])
         
         if self.base_dataset.split == 'train':
+            freq_mask_size = torch.randint(1, 10, (1,)).item()
+            freq_start = torch.randint(0, spectrograms.shape[-2] - freq_mask_size, (1,)).item()
+            spectrograms[:, freq_start:freq_start + freq_mask_size, :] = 0
+            
+            time_mask_size = torch.randint(1, 5, (1,)).item()
+            time_start = torch.randint(0, spectrograms.shape[-1] - time_mask_size, (1,)).item()
+            spectrograms[:, :, time_start:time_start + time_mask_size] = 0
+
             scale = torch.empty(1).uniform_(0.8, 1.2).item()
             spectrograms = spectrograms * scale
-            
-            noise = torch.randn_like(spectrograms) * 0.1
+            noise = torch.randn_like(spectrograms) * 0.05
             spectrograms = spectrograms + noise
         
-        return spectrograms, target_label
+        subject_id_int = int(subject_id) if subject_id.isdigit() else 0
+        return spectrograms, target_label, subject_id_int

@@ -8,15 +8,13 @@ __pycache__/
 
 venv/
 
-# Výstupy a logy - lokální (necommituj)
+# Výstupy 
 logs/
 *.out
 *.err
 *.png
 *.csv
 loss_history.csv
-*.pth
-*.json
 
 .vscode
 

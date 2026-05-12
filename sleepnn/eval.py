@@ -2,23 +2,23 @@ import torch
 from torch.utils.data import DataLoader
 from sklearn.metrics import (
     confusion_matrix, classification_report, accuracy_score, f1_score,
-    precision_score, recall_score, cohen_kappa_score, log_loss
+    precision_score, recall_score, cohen_kappa_score, log_loss, roc_curve, auc
 )
 import seaborn as sns
 import matplotlib.pyplot as plt
 import os
 import numpy as np
-
+from sklearn.manifold import TSNE
 from dataset import SequenceDataset
 from model import SequenceCNN
 
+
 RUN_ID = os.environ.get("SLEEPNN_RUN_ID")
-SEQ_LEN = 20
-STRIDE = 5
-LSTM_HIDDEN = 64
+SEQ_LEN = 32
+LSTM_HIDDEN = 128
 NUM_HEADS = 4
 ATTN_DROPOUT = 0.1
-LSTM_LAYERS = 1
+LSTM_LAYERS = 2
 LSTM_DROPOUT = 0.3
 CLASSIFIER_DROPOUT1 = 0.5
 CLASSIFIER_DROPOUT2 = 0.3
@@ -156,14 +156,146 @@ def plot_eval_metrics(all_labels, all_preds, all_probs, run_id):
     print(f"  Cohen Kappa:            {kappa:.4f}")
     print(f"  Log Loss:               {logloss:.4f}")
 
+def plot_roc_curves(all_labels, all_probs, run_id):
+    """Plot ROC curves (One-vs-Rest) for each sleep stage."""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    class_names = ['Wake', 'NREM', 'REM']
+    colors = ['#1f77b4', '#2ca02c', '#ff7f0e']
+    
+    for i, (name, color) in enumerate(zip(class_names, colors)):
+        y_bin = (np.array(all_labels) == i).astype(int)
+        fpr, tpr, _ = roc_curve(y_bin, np.array(all_probs)[:, i])
+        roc_auc = auc(fpr, tpr)
+        ax.plot(fpr, tpr, color=color, lw=2,
+                label=f'{name} (AUC = {roc_auc:.3f})')
+    
+    ax.plot([0, 1], [0, 1], 'k--', lw=1)
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('ROC Curves (One-vs-Rest)')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"outputs/roc_curves_{run_id}.png", dpi=300)
+    print(f"ROC curves saved to outputs/roc_curves_{run_id}.png")
+
+def plot_per_subject_f1(all_labels, all_preds, all_subject_ids, run_id):
+    """Per-subject F1 score analýza – pro identifikaci problémových subjektů."""
+    subjects = sorted(set(all_subject_ids))
+    f1_scores = []
+    
+    for subj in subjects:
+        mask = np.array(all_subject_ids) == subj
+        if mask.sum() < 10:
+            continue
+        f1 = f1_score(
+            np.array(all_labels)[mask],
+            np.array(all_preds)[mask],
+            average='macro'
+        )
+        f1_scores.append((subj, f1))
+    
+    f1_scores.sort(key=lambda x: x[1])
+    subjects_sorted = [str(x[0]) for x in f1_scores]
+    scores_sorted = [x[1] for x in f1_scores]
+    
+    plt.figure(figsize=(12, 5))
+    colors = ['red' if s < 0.75 else 'steelblue' for s in scores_sorted]
+    plt.bar(range(len(subjects_sorted)), scores_sorted, color=colors, alpha=0.7)
+    plt.axhline(y=np.mean(scores_sorted), color='black', linestyle='--', 
+                label=f'Mean F1: {np.mean(scores_sorted):.3f}')
+    plt.xticks(range(len(subjects_sorted)), subjects_sorted, rotation=45)
+    plt.xlabel('Subject ID', fontsize=12)
+    plt.ylabel('Macro F1', fontsize=12)
+    plt.title('Per-Subject Classification Performance', fontsize=14, fontweight='bold')
+    plt.legend()
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
+    plt.savefig(f"outputs/per_subject_f1_{run_id}.png", dpi=300)
+    print(f"Per-subject F1 chart saved to outputs/per_subject_f1_{run_id}.png")
+
+def extract_latent_features(model, test_loader, device):
+    model.eval()
+    all_features = []
+    all_labels = []
+    all_subject_ids = []
+
+    features_hook = []
+    
+    def hook_fn(module, input, output):
+        features_hook.append(input[0].detach().cpu())
+    
+    hook = model.classifier[-1].register_forward_hook(hook_fn)
+    
+    try:
+        with torch.no_grad():
+            for signals, labels, subject_ids in test_loader:
+                signals = signals.to(device)
+                labels = labels.to(device)
+                features_hook.clear()
+                _ = model(signals)
+                if features_hook:
+                    all_features.append(features_hook[0])
+                
+                all_labels.extend(labels.cpu().numpy())
+                all_subject_ids.extend(subject_ids)
+    
+    finally:
+        hook.remove()
+
+    all_features = np.concatenate(all_features, axis=0)
+    all_labels = np.array(all_labels)
+    
+    print(f"Extrahováno {all_features.shape[0]} latentních features")
+    print(f"Dimenze features: {all_features.shape[1]}")
+    
+    return all_features, all_labels, all_subject_ids
+
+def plot_latent_features_tsne(features, labels, subject_ids, run_id):    
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30, max_iter=1000)
+    features_2d = tsne.fit_transform(features)
+    class_colors = {0: '#1f77b4', 1: '#2ca02c', 2: '#ff7f0e'}  
+    class_names = {0: 'Wake', 1: 'NREM', 2: 'REM'}
+    
+    plt.figure(figsize=(10, 8))
+    for class_id in sorted(set(labels)):
+        mask = labels == class_id
+        plt.scatter(features_2d[mask, 0], features_2d[mask, 1], 
+                   c=class_colors[class_id], label=class_names[class_id], 
+                   alpha=0.6, s=30, edgecolors='black', linewidth=0.5)
+    plt.xlabel('t-SNE Dimension 1')
+    plt.ylabel('t-SNE Dimension 2')
+    plt.title('Latent Features - t-SNE (by Sleep Stage)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(f"outputs/tsne_features_by_class_{run_id}.png", dpi=300)
+    unique_subjects = sorted(set(subject_ids))
+    num_subjects = len(unique_subjects)
+    colors = plt.cm.tab20(np.linspace(0, 1, num_subjects))
+    subject_to_color = {subj: colors[i] for i, subj in enumerate(unique_subjects)}
+    
+    plt.figure(figsize=(12, 8))
+    for subj in unique_subjects:
+        mask = np.array(subject_ids) == subj
+        plt.scatter(features_2d[mask, 0], features_2d[mask, 1], 
+                   c=[subject_to_color[subj]], label=f'Subject {subj}', 
+                   alpha=0.6, s=30, edgecolors='black', linewidth=0.5)
+    plt.xlabel('t-SNE Dimension 1')
+    plt.ylabel('t-SNE Dimension 2')
+    plt.title('Latent Features - t-SNE (by Subject)')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+    plt.tight_layout()
+    plt.savefig(f"outputs/tsne_features_by_subject_{run_id}.png", dpi=300, bbox_inches='tight')
+
 def evaluate_model(model, test_loader, device):
     model.eval() 
     all_preds = []
     all_labels = []
     all_probs = []
+    all_subject_ids = []
 
     with torch.no_grad():
-        for signals, labels in test_loader:
+        for signals, labels, subject_ids in test_loader:
             signals = signals.to(device)
             labels = labels.to(device)
             
@@ -174,6 +306,7 @@ def evaluate_model(model, test_loader, device):
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
             all_probs.extend(probs.cpu().numpy())
+            all_subject_ids.extend(subject_ids)
 
     all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
@@ -203,7 +336,15 @@ def evaluate_model(model, test_loader, device):
     plot_hypnogram(all_labels, all_preds, RUN_ID)
     plot_f1_per_class(all_labels, all_preds, RUN_ID)
     plot_scatter_confidence(all_labels, all_probs, RUN_ID)
+    plot_roc_curves(all_labels, all_probs, RUN_ID)
+    plot_per_subject_f1(all_labels, all_preds, all_subject_ids, RUN_ID)
     plot_eval_metrics(all_labels, all_preds, all_probs, RUN_ID)
+    
+    print("\nExtracting and visualizing latent features...")
+    latent_features, feat_labels, feat_subject_ids = extract_latent_features(
+        model, test_loader, device)
+    plot_latent_features_tsne(
+        latent_features, feat_labels, feat_subject_ids, RUN_ID)
     
     return accuracy_score(all_labels, all_preds), cm
 

@@ -17,20 +17,20 @@ from dataset import SequenceDataset
 from model import  SequenceCNN
 
 RUN_ID = os.environ.get("SLEEPNN_RUN_ID")
-SEQ_LEN = 20
+SEQ_LEN = 32
 STRIDE = 5
-LSTM_HIDDEN = 64
+LSTM_HIDDEN = 128
 NUM_HEADS = 4
 ATTN_DROPOUT = 0.1 
-LSTM_LAYERS = 1
+LSTM_LAYERS = 2
 LSTM_DROPOUT = 0.3   
 CLASSIFIER_DROPOUT1 = 0.5
 CLASSIFIER_DROPOUT2 = 0.3
 LABEL_SMOOTH = 0.02
-WEIGHT_DECAY = 3e-3
+WEIGHT_DECAY = 5e-4
 LEARNING_RATE = 1e-4
 WARMUP_EPOCHS = 3
-PATIENCE = 15
+PATIENCE = 25
 
 USE_CLASS_WEIGHTS = True
 os.makedirs("outputs", exist_ok=True)
@@ -45,7 +45,6 @@ def compute_class_weights(train_labels, num_classes=3):
     return weights
 
 def get_or_compute_class_weights(data_dir: str, split_ratio: float = 0.8, num_classes: int = 3):
-    # nový cache název, aby se nenačetly staré (bez sqrt) váhy
     cache_file = f"outputs/class_weights_cache_{RUN_ID}_sqrt.json"
     
     if os.path.exists(cache_file):
@@ -93,6 +92,23 @@ class EarlyStopping:
     def save_best_checkpoint(self):
         global RUN_ID
         torch.save(self.best_model_state, f"outputs/best_model_checkpoint_{RUN_ID}.pth")
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, weight=None, gamma=2.0, label_smoothing=0.02):
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+    
+    def forward(self, inputs, targets):
+        ce_loss = nn.functional.cross_entropy(
+            inputs, targets, weight=self.weight, 
+            label_smoothing=self.label_smoothing, 
+            reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
 
 
 def main():
@@ -204,10 +220,7 @@ def main():
     output_plot = f"outputs/training_metrics_lstm_{RUN_ID}.png"
 
     
-    criterion = nn.CrossEntropyLoss(
-        weight=class_weights,
-        label_smoothing=LABEL_SMOOTH
-    )
+    criterion = FocalLoss(weight=class_weights, gamma=2.0, label_smoothing=LABEL_SMOOTH)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY) 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=PATIENCE//2, factor=0.5)
     
@@ -241,14 +254,15 @@ def main():
         running_loss = 0.0
         train_total = 0.0
         
-        for batch_idx, (signals, labels) in enumerate(train_loader):
+        for batch_idx, (signals, labels, _) in enumerate(train_loader):
             signals = signals.to(device)
             labels = labels.to(device)
             
             optimizer.zero_grad()
             outputs = model(signals)
             loss = criterion(outputs, labels)
-            loss.backward() 
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             loss_val = loss.item()
@@ -277,7 +291,7 @@ def main():
         all_labels = []
         
         with torch.no_grad():
-            for signals, labels in test_loader:
+            for signals, labels, _ in test_loader:
                 signals = signals.to(device)
                 labels = labels.to(device)
                 outputs = model(signals)
