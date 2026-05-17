@@ -2,8 +2,8 @@
 #SBATCH --job-name=sleep_train_single
 #SBATCH --partition=long
 #SBATCH --gres=gpu:4        
-#SBATCH --cpus-per-task=32   # AMD EPYC: 48 cores, leave some for system
-#SBATCH --mem=256G           # Use more available memory (512GB total)
+#SBATCH --cpus-per-task=32   
+#SBATCH --mem=256G          
 #SBATCH --time=12:00:00
 #SBATCH --output=logs/train_%j.out
 #SBATCH --error=logs/train_%j.err
@@ -18,7 +18,6 @@ export SLEEPNN_RUN_ID="$RUN_ID"
 echo "RUN_ID=${RUN_ID}"
 
 
-# NCCL settings
 export NCCL_TIMEOUT_MIN=30
 export TORCH_NCCL_BLOCKING_WAIT=1
 export NCCL_DEBUG=INFO

@@ -37,7 +37,7 @@ os.makedirs("outputs", exist_ok=True)
 
 def compute_class_weights(train_labels, num_classes=3):
     counts = np.bincount(train_labels.astype(int), minlength=num_classes).astype(np.float32)
-    counts = np.clip(counts, 1.0, None)  # ochrana proti dělení nulou
+    counts = np.clip(counts, 1.0, None)
     counts_t = torch.tensor(counts, dtype=torch.float32)
     total = counts_t.sum()
     weights = torch.sqrt(total / (num_classes * counts_t))
@@ -84,7 +84,6 @@ class EarlyStopping:
             self.counter = 0
             self.best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             self.save_best_checkpoint()
-            print(f"  Best model saved (F1: {f1:.4f})")
         else:
             self.counter += 1
         return self.counter >= self.patience
@@ -122,11 +121,6 @@ def main():
     
     log_on_rank_0 = rank == 0
     
-    if log_on_rank_0:
-        print(f"\n{'='*60}")
-        print(f"Distributed Training: {world_size} GPUs")
-        print(f"{'='*60}\n")
-    
     BATCH_SIZE = 16
     
     NUM_EPOCHS = 100
@@ -158,16 +152,14 @@ def main():
         pin_memory=True,
         persistent_workers=NUM_WORKERS > 0
     )
-    
-    if log_on_rank_0:
-        print(f"Train: {len(train_dataset)} sequences")
+
 
     test_dataset = SequenceDataset(
             DATA_DIR,
             split='test',
             split_ratio=TRAIN_RATIO,
             sequence_length=SEQ_LEN,
-            stride=SEQ_LEN
+            stride=1
         )
 
     test_sampler = DistributedSampler(
@@ -186,9 +178,7 @@ def main():
         pin_memory=True,
         persistent_workers=NUM_WORKERS > 0
     )
-    
-    if log_on_rank_0:
-        print(f"Test: {len(test_dataset)} sequences\n")
+
     
     if rank == 0:
         class_weights = get_or_compute_class_weights(DATA_DIR, split_ratio=TRAIN_RATIO, num_classes=3)
@@ -223,12 +213,7 @@ def main():
     criterion = FocalLoss(weight=class_weights, gamma=2.0, label_smoothing=LABEL_SMOOTH)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY) 
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=PATIENCE//2, factor=0.5)
-    
-    if log_on_rank_0:
-        print(f"Model initialized: {model_name}\n")
-        print(f"{'='*60}")
-        print("Starting training...")
-        print(f"{'='*60}\n")
+
     
     
     train_losses = []
@@ -237,7 +222,6 @@ def main():
     epoch_f1_scores = []
     early_stopping = EarlyStopping(patience=PATIENCE)
     first_epoch_losses = []
-    
     def set_optimizer_lr(opt, lr):
         for param_group in opt.param_groups:
             param_group["lr"] = lr

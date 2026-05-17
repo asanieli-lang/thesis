@@ -287,7 +287,7 @@ class SequenceDataset(Dataset):
         
         data = self._load_data_file(spec_path)
         
-        spectrograms = data['spectrograms'][local_start:local_start + self.sequence_length]
+        spectrograms = data['spectrograms'][local_start:local_start + self.sequence_length].clone()
         labels = data['labels'][local_start:local_start + self.sequence_length]
         
         target_label = int(labels[-1])
