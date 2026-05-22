@@ -1,6 +1,7 @@
 import torch
 from pathlib import Path
 
+# STFT parameters for spectrogram computation
 N_FFT = 256
 HOP_LENGTH = 50
 
@@ -12,17 +13,22 @@ output_dir.mkdir(parents=True, exist_ok=True)
 
 
 def signal_to_spectrogram(signal):
+    """Compute magnitude spectrogram via STFT with z-score normalization."""
+    # Normalize signal via z-score
     signal = (signal - signal.mean()) / (signal.std() + 1e-8)
+    # Compute magnitude spectrogram via STFT
     window = torch.hann_window(N_FFT)
     stft_result = torch.stft(signal, n_fft=N_FFT, hop_length=HOP_LENGTH, window=window, return_complex=True)
     return torch.abs(stft_result)
 
 
 def process_file(input_file):
+    """Load signal file and compute per-channel spectrograms using STFT."""
     data = torch.load(input_file, map_location='cpu', weights_only=True)
     signals = data['signals']
     labels = data['labels']
     
+    # Compute spectrogram per window and channel
     n_windows, n_channels, _ = signals.shape
     spectrograms_list = []
     
@@ -40,6 +46,7 @@ def process_file(input_file):
 
 
 if __name__ == "__main__":
+    # Process all input files and generate spectrograms
     input_files = sorted(input_dir.glob('*_processed.pt'))
     
     for i, f in enumerate(input_files, 1):

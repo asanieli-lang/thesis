@@ -2,7 +2,11 @@ import torch.nn as nn
 import torch
 
 class MultiHeadAttention(nn.Module):
+    """Multi-head scaled dot-product attention mechanism."""
+    
+    
     def __init__(self, hidden_dim, num_heads=4, dropout=0.1):
+        """Initialize multi-head attention with projection layers."""
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
@@ -16,7 +20,9 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def forward(self, x):
+        """Compute attention over sequence and return final representation."""
         batch_size, seq_len, hidden_dim = x.shape
+        # Project and reshape for multi-head computation
         Q = self.query(x).view(batch_size, seq_len, 
                                 self.num_heads, self.head_dim).transpose(1, 2)
         K = self.key(x).view(batch_size, seq_len, 
@@ -24,19 +30,25 @@ class MultiHeadAttention(nn.Module):
         V = self.value(x).view(batch_size, seq_len, 
                                 self.num_heads, self.head_dim).transpose(1, 2)
         
+        # Compute scaled dot-product attention scores
         scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
         attn_weights = torch.softmax(scores, dim=-1)
         attn_weights = self.dropout(attn_weights)
         
+        # Merge heads and project to output space
         context = torch.matmul(attn_weights, V)
         context = context.transpose(1, 2).contiguous().view(
                                 batch_size, seq_len, hidden_dim)
         context = self.out(context)
 
+        # Return final representation and attention weights
         return context[:, -1, :], attn_weights
 
 class ResidualBlock2d(nn.Module):
+    """Residual block with optional stride and skip connection."""
+    
     def __init__(self, in_channels, out_channels, kernel_size=(3,3), dilation=1, stride=1):
+        """Initialize conv-bn-relu block with optional channel projection."""
         super().__init__()
         padding = ((kernel_size[0] - 1) * dilation // 2, (kernel_size[1] - 1) * dilation // 2)
         
@@ -57,30 +69,35 @@ class ResidualBlock2d(nn.Module):
             )
     
     def forward(self, x):
+        """Apply residual block with skip connection."""
         residual = self.skip(x)
+        # Main residual path with conv-bn-relu
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
         out = self.conv2(out)
         out = self.bn2(out)
+        # Add skip connection and apply activation
         out = out + residual
         out = self.relu(out)
         return out
 
 
 class SequenceCNN(nn.Module):    
+    """CNN+LSTM+Attention architecture for temporal EEG classification."""
     def __init__(
         self,
         channels=4,
         num_classes=3,
         lstm_hidden=128,
         attn_dropout=0.1,
-        num_heads=2,
+        num_heads=4,
         lstm_layers=2,
         lstm_dropout=0.5,
         classifier_dropout1=0.5,
         classifier_dropout2=0.3
     ):
+        """Initialize multi-scale CNN with residual blocks, LSTM, and attention."""
         super().__init__()
         self.multi_scale = nn.ModuleList([
             nn.Sequential(
@@ -132,27 +149,32 @@ class SequenceCNN(nn.Module):
         )
     
     def forward(self, x):
+        """Forward pass through CNN, LSTM, attention, and classifier."""
         batch_size, seq_len, channels, height, width = x.shape
         x = x.reshape(batch_size * seq_len, channels, height, width)
+        # Extract multi-scale spectrogram features
         x_scales = [layer(x) for layer in self.multi_scale]
         x = torch.cat(x_scales, dim=1)  
         
         x = self.maxpool(x)
         
-
+        # Apply residual blocks with channel expansion
         x = self.res_block1(x)
         x = self.res_block2(x)
         x = self.res_block3(x)
         x = self.res_block4(x)
         x = self.res_block5(x)
         
+        # Pool and reshape to sequence format
         x = self.global_avg_pool(x)
         x = x.view(batch_size * seq_len, -1) 
         
         x = x.reshape(batch_size, seq_len, 256)
+        # Model temporal dependencies via LSTM and attention
         lstm_out, _ = self.lstm(x)                  
         context, attn_weights = self.attention(lstm_out) 
         
+        # Classify from attention context
         x = self.classifier(context)
         return x
  

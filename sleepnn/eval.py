@@ -25,6 +25,7 @@ CLASSIFIER_DROPOUT2 = 0.3
 os.makedirs("outputs", exist_ok=True)
 
 def plot_hypnogram(all_labels, all_preds, run_id, num_samples=1000):
+    """Compare predicted vs ground truth sleep stages as time series."""
     plt.figure(figsize=(15, 5))
     plt.plot(all_labels[:num_samples], label='Ground Truth', alpha=0.7, color='black', linewidth=2)
     plt.plot(all_preds[:num_samples], label='Predicted', alpha=0.5, color='red', linestyle='--', linewidth=1.5)
@@ -39,6 +40,7 @@ def plot_hypnogram(all_labels, all_preds, run_id, num_samples=1000):
     plt.close()
 
 def plot_f1_per_class(all_labels, all_preds, run_id):
+    """Show per-stage F1 scores to identify imbalanced class performance."""
     f1_per_class = f1_score(all_labels, all_preds, average=None)
     
     plt.figure(figsize=(8, 5))
@@ -58,7 +60,7 @@ def plot_f1_per_class(all_labels, all_preds, run_id):
     plt.close()
 
 def plot_roc_curves(all_labels, all_probs, run_id):
-    """Plot ROC curves (One-vs-Rest) for each sleep stage."""
+    """Generate one-vs-rest ROC curves for each sleep stage."""
     fig, ax = plt.subplots(figsize=(8, 6))
     class_names = ['Wake', 'NREM', 'REM']
     colors = ['#1f77b4', '#2ca02c', '#ff7f0e']
@@ -80,6 +82,7 @@ def plot_roc_curves(all_labels, all_probs, run_id):
     plt.close()
 
 def plot_per_subject_f1(all_labels, all_preds, all_subject_ids, run_id):
+    """Evaluate generalization by showing per-subject macro-F1 scores."""
     subjects = np.unique(all_subject_ids)
     f1_scores = []
     valid_subjects = []
@@ -109,6 +112,7 @@ def plot_per_subject_f1(all_labels, all_preds, all_subject_ids, run_id):
     plt.close()
 
 def extract_latent_features(model, test_loader, device):
+    """Extract features from classification layer using forward hook."""
     model.eval()
     all_features = []
     all_labels = []
@@ -116,6 +120,7 @@ def extract_latent_features(model, test_loader, device):
 
     features_hook = []
     
+    # Hook to capture activations before final classification layer
     def hook_fn(module, input, output):
         features_hook.append(input[0].detach().cpu())
     
@@ -142,11 +147,13 @@ def extract_latent_features(model, test_loader, device):
     return all_features, all_labels, all_subject_ids
 
 def plot_umap_3d(features, labels, subject_ids, run_id):
+    """Visualize learned representations using UMAP 2D and 3D dimensionality reduction."""
     try:
         import umap
     except ImportError:
         return
     
+    # Subsample to 20k samples for UMAP efficiency
     n = len(features)
     if n > 20000:
         idx = np.random.choice(n, 20000, replace=False)
@@ -198,16 +205,19 @@ def plot_umap_3d(features, labels, subject_ids, run_id):
     plt.close(fig)
 
 def evaluate_model(model, test_loader, device):
+    """Perform comprehensive evaluation with metrics and visualization plots."""
     model.eval() 
     all_preds = []
     all_labels = []
     all_probs = []
     all_subject_ids = []
 
+    # Collect predictions and probabilities over test set
     with torch.no_grad():
         for signals, labels, subject_ids in test_loader:
             signals = signals.to(device)
             
+            # Forward pass to get class probabilities
             outputs = model(signals)
             probs = torch.nn.functional.softmax(outputs, dim=1)
             _, preds = torch.max(outputs, 1)
@@ -222,6 +232,7 @@ def evaluate_model(model, test_loader, device):
     all_probs = np.array(all_probs)
     all_subject_ids = np.array(all_subject_ids)
 
+    # Display standard classification metrics
     print("\n" + "="*50)
     print("EVALUATION RESULTS")
     print("="*50)
@@ -229,6 +240,7 @@ def evaluate_model(model, test_loader, device):
     print(f"Overall Accuracy: {accuracy_score(all_labels, all_preds):.4f}")
     print(f"F1 Score (Macro): {f1_score(all_labels, all_preds, average='macro'):.4f}\n")
 
+    # Generate and visualize confusion matrix
     cm = confusion_matrix(all_labels, all_preds, labels=[0, 1, 2])  # 0=Wake, 1=NREM, 2=REM
     cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100
     
@@ -243,11 +255,13 @@ def evaluate_model(model, test_loader, device):
     plt.savefig(f"outputs/final_eval_cm_{RUN_ID}.png", dpi=300)
     plt.close()
     
+    # Generate evaluation plots
     plot_hypnogram(all_labels, all_preds, RUN_ID)
     plot_f1_per_class(all_labels, all_preds, RUN_ID)
     plot_roc_curves(all_labels, all_probs, RUN_ID)
     plot_per_subject_f1(all_labels, all_preds, all_subject_ids, RUN_ID)
     
+    # Extract and visualize learned latent representations
     latent_features, feat_labels, feat_subject_ids = extract_latent_features(
         model, test_loader, device)
     plot_umap_3d(latent_features, feat_labels, feat_subject_ids, RUN_ID)
@@ -255,12 +269,15 @@ def evaluate_model(model, test_loader, device):
     return accuracy_score(all_labels, all_preds), cm
 
 def main():
+    """Load checkpoint, evaluate on test set, and generate comprehensive metrics."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Load model and configuration
     MODEL_PATH = f"outputs/best_model_checkpoint_{RUN_ID}.pth"
     TEST_DATA_DIR = os.environ.get("SLEEPNN_DATA_DIR", "/mnt/scratch/temporary/asanieli_data/processed_pt")
-    BATCH_SIZE = 16
+    BATCH_SIZE = 16  # Must match train.py batch size
     NUM_WORKERS = 4
+    TEST_STRIDE = SEQ_LEN  # Non-overlapping evaluation windows
     model = SequenceCNN(
         channels=4,
         num_classes=3,
@@ -280,7 +297,7 @@ def main():
         split='test',
         split_ratio=0.8,
         sequence_length=SEQ_LEN,
-        stride=1
+        stride=TEST_STRIDE  # Non-overlapping to avoid double-counting samples
     )
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True)
     accuracy, cm = evaluate_model(model, test_loader, device)
